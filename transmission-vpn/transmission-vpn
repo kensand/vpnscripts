@@ -1,0 +1,87 @@
+#!/bin/bash
+# rm vpnlog.txt
+child_pid="NULL"
+ovpnfile="$(file.ovpn)"
+
+function finish {
+    iptables-restore < /root/iptab-lockdown
+    service transmission-daemon stop
+    service open-vpn stop
+}
+trap finish EXIT
+
+while true
+do
+    echo "Reseting"    
+    route add default gw 192.168.0.1
+    service openvpn stop
+
+    if (( "$child_pid" != "NULL" )) 
+    then
+	/bin/kill -9 $child_pid &
+    fi
+
+    service openvpn stop
+    service transmission-daemon stop
+    echo "transmission stopped"
+
+    iptables-restore < /root/iptab-open
+    echo "disabling kill switch & connecting to vpn"
+    ip="$(/root/bin/checkIP)"
+    echo "IP address is $ip"
+    service openvpn start
+    /usr/sbin/openvpn --config "$ovpnfile" --mute-replay-warnings & #> vpnlog.txt &
+    child_pid=$!
+    newip="$(/root/bin/checkIP)"
+    count="0"
+    while [[ "$ip" == "$newip" ]] && (( $count < 10))   # /sbin/ifconfig tun0 | grep "00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00"
+    do
+	echo "waiting for tun0 to open"
+	let "count += 1"
+	newip="$(/root/bin/checkIP)"
+	sleep 5
+    done
+
+    if (( "$count" < "10" ))
+    then
+	iptables-restore <  /root/iptab-closed
+	echo "killswitch active"
+	service transmission-daemon start
+	echo "transmission started"
+	newip="$(/root/bin/checkIP)"
+	echo "IP address is $newip"
+	count="0"
+	while [[ "$ip" != "$newip" ]] # /sbin/ifconfig tun0 | grep "00-00-00-00-00-00-00-00-00-00-00-00-00-00-00-00"
+	do
+	    # newip="$(checkIP)"
+	    # if [ newip == ip ]
+	    # then
+	    # echo "transmission stopped"
+	    # service transmission-daemon stop
+	    # if [ "$child_pid" != "NULL" ]
+	    # then
+	    # echo "Openvpn pid killed"
+	    # /bin/kill -2 $child_pid
+	    # fi
+	    # echo "iptab locked down"
+	    # service openvpn stop
+	    # iptables-restore < /root/iptab-lockdown
+	    # fi
+	    let "count += 1"
+	    if (( "$count" > "1000"))
+	    then
+		rm -rf slick.log
+		count="0"
+	    fi
+	    
+	    date="$(date)"
+	    echo "$date  ::  Old IP: $ip, New IP: $newip"
+	    sleep 1
+	done
+    fi
+    iptables-restore < /root/iptab-lockdown
+    service transmission-daemon stop
+
+done
+
+
